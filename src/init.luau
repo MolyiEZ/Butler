@@ -50,7 +50,7 @@ export type ButlerStatic = {
 	IsButler: (obj: any) -> boolean,
 }
 
-type ButlerPrivate = {
+type ButlerPrivate = Butler & {
 	Objects: { [any]: TCleanupKey },
 
 	CheckCleaning: (self: ButlerPrivate, method: string) -> (),
@@ -74,11 +74,11 @@ function ButlerStatic.IsButler(obj: any): boolean
 	return type(obj) == "table" and getmetatable(obj) == Butler
 end
 
-function Butler.CheckCleaning(self: Butler & ButlerPrivate, method: string)
+function Butler.CheckCleaning(self: ButlerPrivate, method: string)
 	if self.CurrentlyCleaning then error(("Cannot call method '%s' while cleaning"):format(method), 2) end
 end
 
-function Butler.Add<T>(self: Butler & ButlerPrivate, object: T, cleanupMethod: TCleanupKey): T
+function Butler.Add<T>(self: ButlerPrivate, object: T, cleanupMethod: TCleanupKey): T
 	self:CheckCleaning("Add")
 	self.Objects[object] = cleanupMethod
 
@@ -86,7 +86,7 @@ function Butler.Add<T>(self: Butler & ButlerPrivate, object: T, cleanupMethod: T
 end
 
 function Butler.Connect<T...>(
-	self: Butler & ButlerPrivate,
+	self: ButlerPrivate,
 	signal: TSignalLike<T...> | RBXScriptSignal<T...>,
 	callback: (T...) -> ()
 ): RBXScriptConnection | TDisconnectable
@@ -99,7 +99,7 @@ function Butler.Connect<T...>(
 end
 
 function Butler.ConnectParallel<T...>(
-	self: Butler & ButlerPrivate,
+	self: ButlerPrivate,
 	signal: RBXScriptSignal<T...>,
 	callback: (T...) -> ()
 ): RBXScriptConnection | TDisconnectable
@@ -112,7 +112,7 @@ function Butler.ConnectParallel<T...>(
 end
 
 function Butler.Once<T...>(
-	self: Butler & ButlerPrivate,
+	self: ButlerPrivate,
 	signal: TSignalLike<T...>,
 	callback: (T...) -> ()
 ): RBXScriptConnection | TDisconnectable
@@ -132,7 +132,7 @@ function Butler.Once<T...>(
 end
 
 function Butler.BindToRenderStep(
-	self: Butler & ButlerPrivate,
+	self: ButlerPrivate,
 	name: string,
 	priority: number,
 	callback: (dt: number) -> ()
@@ -148,24 +148,21 @@ function Butler.BindToRenderStep(
 	return self
 end
 
-function Butler.Extend(self: Butler & ButlerPrivate): Butler
+function Butler.Extend(self: ButlerPrivate): Butler
 	self:CheckCleaning("Extend")
 	local child = ButlerStatic.new()
 	self:Add(child, "Destroy")
 	return child
 end
 
-function Butler.AttachToInstance(
-	self: Butler & ButlerPrivate,
-	instance: Instance
-): RBXScriptConnection | TDisconnectable
+function Butler.AttachToInstance(self: ButlerPrivate, instance: Instance): RBXScriptConnection | TDisconnectable
 	self:CheckCleaning("AttachToInstance")
 	return self:Connect(instance.Destroying, function()
 		self:Destroy()
 	end)
 end
 
-function Butler.Remove(self: Butler & ButlerPrivate, object: any?): Butler
+function Butler.Remove(self: ButlerPrivate, object: any?): Butler
 	if self.CurrentlyCleaning then return self end
 
 	if object == nil then return self end
@@ -179,13 +176,13 @@ function Butler.Remove(self: Butler & ButlerPrivate, object: any?): Butler
 	return self
 end
 
-function Butler.RemoveWithoutCleaning(self: Butler & ButlerPrivate, object: any?): Butler
+function Butler.RemoveWithoutCleaning(self: ButlerPrivate, object: any?): Butler
 	self:CheckCleaning("RemoveWithoutCleaning")
 	if object ~= nil then self.Objects[object] = nil end
 	return self
 end
 
-function Butler.RemoveList(self: Butler & ButlerPrivate, ...: any): Butler
+function Butler.RemoveList(self: ButlerPrivate, ...: any): Butler
 	self:CheckCleaning("RemoveList")
 	for _, obj in { ... } do
 		self:Remove(obj)
@@ -193,7 +190,7 @@ function Butler.RemoveList(self: Butler & ButlerPrivate, ...: any): Butler
 	return self
 end
 
-function Butler.RemoveListWithoutCleaning(self: Butler & ButlerPrivate, ...: any): Butler
+function Butler.RemoveListWithoutCleaning(self: ButlerPrivate, ...: any): Butler
 	self:CheckCleaning("RemoveListWithoutcleaning")
 	for _, obj in { ... } do
 		self:RemoveWithoutCleaning(obj)
@@ -201,7 +198,7 @@ function Butler.RemoveListWithoutCleaning(self: Butler & ButlerPrivate, ...: any
 	return self
 end
 
-function Butler.Clean(self: Butler & ButlerPrivate)
+function Butler.Clean(self: ButlerPrivate)
 	self:CheckCleaning("Clean")
 	self.CurrentlyCleaning = true
 
@@ -213,13 +210,13 @@ function Butler.Clean(self: Butler & ButlerPrivate)
 	self.CurrentlyCleaning = false
 end
 
-function Butler.Destroy(self: Butler & ButlerPrivate)
+function Butler.Destroy(self: ButlerPrivate)
 	self:Clean()
 	table.clear(self)
 	setmetatable(self, nil)
 end
 
-function Butler.CleanObject<T>(self: Butler & ButlerPrivate, object: T, cleanupMethod: TCleanupKey)
+function Butler.CleanObject<T>(self: ButlerPrivate, object: T, cleanupMethod: TCleanupKey)
 	if type(cleanupMethod) == "boolean" then
 		if type(object) == "function" then
 			(object :: any)()
