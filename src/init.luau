@@ -1,40 +1,41 @@
+--!native
+--!optimize 2
+
 local RunService = game:GetService("RunService")
 
-export type TCleanupKey = boolean | string
+export type CleanupMethod = string
 
-export type TDisconnectable = {
+export type Connection = {
+	Connected: boolean,
+
 	Disconnect: (self: any) -> (),
+	-- Only works with custom signal modules
+	Reconnect: (self: any) -> (),
 }
 
-export type TSignalLike<T...> = {
-	Connect: (self: any, callback: (T...) -> ()) -> RBXScriptConnection,
-	ConnectParallel: (self: any, callback: (T...) -> ()) -> RBXScriptConnection,
-	Once: (self: any, callback: (T...) -> ()) -> RBXScriptConnection,
-	Wait: (self: any) -> T...,
+export type Signal<T...> = {
+	Connect: (self: Signal<T...>, callback: (T...) -> ()) -> Connection,
+	Once: (self: Signal<T...>, callback: (T...) -> ()) -> Connection,
+	Wait: (self: Signal<T...>) -> T...,
+}
+
+type CleanNode = {
+	Object: any,
+	CleanupMethod: CleanupMethod,
+	Next: CleanNode?,
+	Previous: CleanNode?,
 }
 
 export type Butler = {
 	CurrentlyCleaning: boolean,
 
-	Add: <T>(self: Butler, object: T, cleanupMethod: TCleanupKey) -> T,
-	Connect: <T...>(
-		self: Butler,
-		signal: TSignalLike<T...> | RBXScriptSignal<T...>,
-		callback: (T...) -> ()
-	) -> RBXScriptConnection | TDisconnectable,
-	ConnectParallel: <T...>(
-		self: Butler,
-		signal: RBXScriptSignal<T...>,
-		callback: (T...) -> ()
-	) -> RBXScriptConnection | TDisconnectable,
-	Once: <T...>(
-		self: Butler,
-		signal: TSignalLike<T...>,
-		callback: (T...) -> ()
-	) -> RBXScriptConnection | TDisconnectable,
+	Add: <T>(self: Butler, object: T, cleanupMethod: CleanupMethod?) -> T,
+	Connect: <T...>(self: Butler, signal: Signal<T...> | RBXScriptSignal<T...>, callback: (T...) -> ()) -> Connection,
+	ConnectParallel: <T...>(self: Butler, signal: RBXScriptSignal<T...>, callback: (T...) -> ()) -> Connection,
+	Once: <T...>(self: Butler, signal: Signal<T...> | RBXScriptSignal<T...>, callback: (T...) -> ()) -> Connection,
 	BindToRenderStep: (self: Butler, name: string, priority: number, callback: (dt: number) -> ()) -> Butler,
 	Extend: (self: Butler) -> Butler,
-	AttachToInstance: (self: Butler, instance: Instance) -> RBXScriptConnection | TDisconnectable,
+	AttachToInstance: (self: Butler, instance: Instance) -> Connection,
 
 	Remove: (self: Butler, object: any?) -> Butler,
 	RemoveWithoutCleaning: (self: Butler, object: any?) -> Butler,
@@ -45,197 +46,267 @@ export type Butler = {
 	Destroy: (self: Butler) -> (),
 }
 
+export type PrivateButler = Butler & {
+	Head: CleanNode?,
+	Objects: { [any]: CleanNode },
+}
+
+local TABLE_CLEANUP_METHODS = table.freeze({ "Disconnect", "disconnect", "Destroy", "destroy" })
+local ENUM_CLEANUP_METHODS = table.freeze({
+	Function = "Function",
+	Thread = "Thread",
+	Disconnect = "Disconnect",
+	disconnect = "disconnect",
+	Destroy = "Destroy",
+	destroy = "destroy",
+})
+
 export type ButlerStatic = {
 	new: () -> Butler,
+	ECleanupMethods: typeof(ENUM_CLEANUP_METHODS),
 	IsButler: (obj: any) -> boolean,
 }
 
-type ButlerPrivate = Butler & {
-	Objects: { [any]: TCleanupKey },
+local task_cancel = task.cancel
+local table_clear = table.clear
 
-	CheckCleaning: (self: ButlerPrivate, method: string) -> (),
-	CleanObject: <T>(self: ButlerPrivate, object: T, cleanup: TCleanupKey) -> (),
-}
-
-local ButlerStatic = {}
+--==[ Butler ]==--
 local Butler = {}
 Butler.__index = Butler
 
-function ButlerStatic.new(): Butler
-	local self = setmetatable({
+local function checkCleaning(self: Butler | PrivateButler, method: string)
+	if self.CurrentlyCleaning then error(`Cannot call method '{method}' while cleaning`, 2) end
+end
+
+local function getCleanupMethod(object: any): string
+	local objType = typeof(object)
+
+	if objType == "function" then
+		return ENUM_CLEANUP_METHODS.Function
+	elseif objType == "thread" then
+		return ENUM_CLEANUP_METHODS.Thread
+	elseif objType == "RBXScriptConnection" then
+		return ENUM_CLEANUP_METHODS.Disconnect
+	elseif objType == "Instance" then
+		return ENUM_CLEANUP_METHODS.Destroy
+	elseif objType == "table" then
+		for _, cleanupMethod in TABLE_CLEANUP_METHODS do
+			if typeof(object[cleanupMethod]) == "function" then return cleanupMethod end
+		end
+	end
+
+	error(`[Butler] Couldn't get the cleanup method for the object: {object}. With type: {objType}`, 3)
+end
+
+local function cleanupErrorHandler(err: string)
+	warn("[Butler] Error during cleanup:", err)
+end
+
+local function cleanObject<T>(object: T, cleanupMethod: CleanupMethod)
+	if cleanupMethod == ENUM_CLEANUP_METHODS.Function then
+		xpcall(object, cleanupErrorHandler)
+	elseif cleanupMethod == ENUM_CLEANUP_METHODS.Thread then
+		local success, err = pcall(task_cancel, object)
+		if not success then cleanupErrorHandler(err) end
+	else
+		local success, err = pcall((object :: any)[cleanupMethod], object)
+		if not success then cleanupErrorHandler(err) end
+	end
+end
+
+local function unlinkNode(self: PrivateButler, node: CleanNode)
+	local nextNode = node.Next
+	local prevNode = node.Previous
+
+	if nextNode then nextNode.Previous = prevNode end
+	if prevNode then
+		prevNode.Next = nextNode
+	elseif self.Head == node then
+		self.Head = node.Next
+	end
+
+	node.Next = nil
+	node.Previous = nil
+end
+
+local function createButler(): Butler
+	return (setmetatable({
 		CurrentlyCleaning = false,
+		Head = nil,
 		Objects = {},
-	}, Butler)
-
-	return (self :: any) :: Butler
+	}, Butler) :: any) :: Butler
 end
 
-function ButlerStatic.IsButler(obj: any): boolean
-	return type(obj) == "table" and getmetatable(obj) == Butler
-end
+function Butler.Add<T>(self: PrivateButler, object: T, cleanupMethod: CleanupMethod?): T
+	checkCleaning(self, "Add")
+	local existingNode = self.Objects[object]
+	if not cleanupMethod then cleanupMethod = getCleanupMethod(object) end
 
-function Butler.CheckCleaning(self: ButlerPrivate, method: string)
-	if self.CurrentlyCleaning then error(("Cannot call method '%s' while cleaning"):format(method), 2) end
-end
+	if existingNode then
+		existingNode.CleanupMethod = cleanupMethod :: string
+		return object
+	end
 
-function Butler.Add<T>(self: ButlerPrivate, object: T, cleanupMethod: TCleanupKey): T
-	self:CheckCleaning("Add")
-	self.Objects[object] = cleanupMethod
+	local node: CleanNode = {
+		Object = object,
+		CleanupMethod = cleanupMethod :: string,
+		Next = self.Head,
+		Previous = nil,
+	}
+
+	if self.Head then self.Head.Previous = node end
+	self.Head = node
+	self.Objects[object] = node
 
 	return object
 end
 
 function Butler.Connect<T...>(
-	self: ButlerPrivate,
-	signal: TSignalLike<T...> | RBXScriptSignal<T...>,
+	self: PrivateButler,
+	signal: Signal<T...> | RBXScriptSignal<T...>,
 	callback: (T...) -> ()
-): RBXScriptConnection | TDisconnectable
-	self:CheckCleaning("Connect")
+): Connection
+	checkCleaning(self, "Connect")
 
-	local conn = (signal :: any):Connect(callback)
-	self:Add(conn, "Disconnect")
-
-	return conn
-end
-
-function Butler.ConnectParallel<T...>(
-	self: ButlerPrivate,
-	signal: RBXScriptSignal<T...>,
-	callback: (T...) -> ()
-): RBXScriptConnection | TDisconnectable
-	self:CheckCleaning("ConnectParallel")
-
-	local connection = signal:ConnectParallel(callback)
-	self:Add(connection, "Disconnect")
+	local connection = (signal :: any):Connect(callback)
+	self:Add(connection, ENUM_CLEANUP_METHODS.Disconnect)
 
 	return connection
 end
 
-function Butler.Once<T...>(
-	self: ButlerPrivate,
-	signal: TSignalLike<T...>,
+function Butler.ConnectParallel<T...>(
+	self: PrivateButler,
+	signal: Signal<T...> | RBXScriptSignal<T...>,
 	callback: (T...) -> ()
-): RBXScriptConnection | TDisconnectable
-	self:CheckCleaning("Once")
+): Connection
+	checkCleaning(self, "ConnectParallel")
 
-	local connection: RBXScriptConnection | TDisconnectable
+	local connection = (signal :: any):ConnectParallel(callback)
+	self:Add(connection, ENUM_CLEANUP_METHODS.Disconnect)
 
-	local function extended(...: T...)
-		self:Remove(connection)
+	return connection
+end
+
+function Butler.Once<T...>(self: PrivateButler, signal: Signal<T...>, callback: (T...) -> ()): Connection
+	checkCleaning(self, "Once")
+	local connection: Connection
+
+	connection = (signal :: any):Once(function(...: T...)
+		if connection then self:Remove(connection) end
 		callback(...)
-	end
+	end)
 
-	connection = signal:Once(extended :: (T...) -> ())
-	self:Add(connection, "Disconnect")
-
+	self:Add(connection, ENUM_CLEANUP_METHODS.Disconnect)
 	return connection
 end
 
 function Butler.BindToRenderStep(
-	self: ButlerPrivate,
+	self: PrivateButler,
 	name: string,
 	priority: number,
 	callback: (dt: number) -> ()
 ): Butler
-	self:CheckCleaning("BindToRenderStep")
+	checkCleaning(self, "BindToRenderStep")
 
 	RunService:BindToRenderStep(name, priority, callback)
 
 	self:Add(function()
 		RunService:UnbindFromRenderStep(name)
-	end, true)
+	end, ENUM_CLEANUP_METHODS.Function)
 
 	return self
 end
 
-function Butler.Extend(self: ButlerPrivate): Butler
-	self:CheckCleaning("Extend")
-	local child = ButlerStatic.new()
-	self:Add(child, "Destroy")
+function Butler.Extend(self: PrivateButler): Butler
+	checkCleaning(self, "Extend")
+	local child = createButler()
+	self:Add(child, ENUM_CLEANUP_METHODS.Destroy)
 	return child
 end
 
-function Butler.AttachToInstance(self: ButlerPrivate, instance: Instance): RBXScriptConnection | TDisconnectable
-	self:CheckCleaning("AttachToInstance")
+function Butler.AttachToInstance(self: Butler, instance: Instance): Connection
+	checkCleaning(self, "AttachToInstance")
 	return self:Connect(instance.Destroying, function()
 		self:Destroy()
 	end)
 end
 
-function Butler.Remove(self: ButlerPrivate, object: any?): Butler
+function Butler.Remove(self: PrivateButler, object: any?): Butler
+	if self.CurrentlyCleaning or object == nil then return self end
+
+	local node = self.Objects[object]
+	if not node then return self end
+
+	unlinkNode(self, node)
+	self.Objects[object] = nil
+	cleanObject(object, node.CleanupMethod)
+
+	return self
+end
+
+function Butler.RemoveWithoutCleaning(self: PrivateButler, object: any?): Butler
+	if self.CurrentlyCleaning or object == nil then return self end
+	local node = self.Objects[object]
+	if not node then return self end
+
+	unlinkNode(self, node)
+	self.Objects[object] = nil
+
+	return self
+end
+
+function Butler.RemoveList(self: Butler, ...: any): Butler
 	if self.CurrentlyCleaning then return self end
 
-	if object == nil then return self end
-
-	local key = self.Objects[object]
-	if key ~= nil then
-		self.Objects[object] = nil
-		self:CleanObject(object, key)
-	end
-
-	return self
-end
-
-function Butler.RemoveWithoutCleaning(self: ButlerPrivate, object: any?): Butler
-	self:CheckCleaning("RemoveWithoutCleaning")
-	if object ~= nil then self.Objects[object] = nil end
-	return self
-end
-
-function Butler.RemoveList(self: ButlerPrivate, ...: any): Butler
-	self:CheckCleaning("RemoveList")
 	for _, obj in { ... } do
 		self:Remove(obj)
 	end
+
 	return self
 end
 
-function Butler.RemoveListWithoutCleaning(self: ButlerPrivate, ...: any): Butler
-	self:CheckCleaning("RemoveListWithoutcleaning")
+function Butler.RemoveListWithoutCleaning(self: Butler, ...: any): Butler
+	if self.CurrentlyCleaning then return self end
+
 	for _, obj in { ... } do
 		self:RemoveWithoutCleaning(obj)
 	end
+
 	return self
 end
 
-function Butler.Clean(self: ButlerPrivate)
-	self:CheckCleaning("Clean")
+function Butler.Clean(self: PrivateButler)
+	checkCleaning(self, "Clean")
 	self.CurrentlyCleaning = true
 
-	for object, cleanupKey in self.Objects do
-		self.Objects[object] = nil
-		self:CleanObject(object, cleanupKey)
+	local current = self.Head
+	while current do
+		cleanObject(current.Object, current.CleanupMethod)
+		local nextNode = current.Next
+		current.Next = nil
+		current.Previous = nil
+		current = nextNode
 	end
 
+	self.Head = nil
+	table_clear(self.Objects)
 	self.CurrentlyCleaning = false
 end
 
-function Butler.Destroy(self: ButlerPrivate)
+function Butler.Destroy(self: Butler)
 	self:Clean()
-	table.clear(self)
+	table_clear(self :: any)
 	setmetatable(self, nil)
 end
 
-function Butler.CleanObject<T>(self: ButlerPrivate, object: T, cleanupMethod: TCleanupKey)
-	if type(cleanupMethod) == "boolean" then
-		if type(object) == "function" then
-			(object :: any)()
-		elseif type(object) == "thread" then
-			local toCleanup = object :: thread
-			if coroutine.status(toCleanup) ~= "dead" and toCleanup ~= coroutine.running() then
-				task.cancel(toCleanup)
-			end
-		else
-			warn("[Butler] Object it's not a function nor a thread:", object)
-		end
-	else
-		local methodName = cleanupMethod :: string
-		local fn = (object :: any)[methodName]
-		if type(fn) ~= "function" then
-			error(("Cleanup method '%s' is not a function on the given object"):format(methodName), 2)
-		end
-		fn(object)
-	end
+--==[ ButlerStatic ]==--
+local ButlerStatic = {}
+
+ButlerStatic.new = createButler
+ButlerStatic.ECleanupMethods = ENUM_CLEANUP_METHODS
+
+function ButlerStatic.IsButler(obj: any): boolean
+	return type(obj) == "table" and getmetatable(obj) == Butler
 end
 
 return ButlerStatic :: ButlerStatic
