@@ -139,13 +139,7 @@ end
 
 function Butler.Add<T>(self: PrivateButler, object: T, cleanupMethod: CleanupMethod?): T
 	checkCleaning(self, "Add")
-	local existingNode = self.Objects[object]
 	if not cleanupMethod then cleanupMethod = getCleanupMethod(object) end
-
-	if existingNode then
-		existingNode.CleanupMethod = cleanupMethod :: string
-		return object
-	end
 
 	local node: CleanNode = {
 		Object = object,

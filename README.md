@@ -6,6 +6,11 @@
 pesde add molyi/butler
 ```
 
+## Why to use Butler?
+
+* **Fully Typed:** Designed to work with the new Luau type solver.
+* **Performance:** Uses a **Doubly Linked List** for O(1) Removal and **LIFO** cleanup structure.
+
 ## Usage
 
 ### Basics
@@ -38,6 +43,11 @@ butler:Clean()
 -- Standard
 butler:Connect(RunService.Heartbeat, function(dt)
     print("Frame")
+end)
+
+-- Once
+butler:Once(humanoid.Died, function(dt)
+    print("skill issue")
 end)
 
 -- Parallel
