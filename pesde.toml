@@ -1,5 +1,6 @@
 name = "molyi/butler"
 version = "1.2.0"
+description = "Memory management library."
 authors = ["Molyi"]
 repository = "https://github.com/MolyiDev/Butler"
 license = "MIT"

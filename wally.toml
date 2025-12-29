@@ -1,6 +1,7 @@
 [package]
 name = "molyidev/butler"
 version = "1.2.0"
+description = "Memory management library."
 authors = ["Molyi"]
 registry = "https://github.com/UpliftGames/wally-index"
 repository = "https://github.com/MolyiDev/Butler"
