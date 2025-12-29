@@ -33,16 +33,16 @@ export type Butler = {
 	Connect: <T...>(self: Butler, signal: Signal<T...> | RBXScriptSignal<T...>, callback: (T...) -> ()) -> Connection,
 	ConnectParallel: <T...>(self: Butler, signal: RBXScriptSignal<T...>, callback: (T...) -> ()) -> Connection,
 	Once: <T...>(self: Butler, signal: Signal<T...> | RBXScriptSignal<T...>, callback: (T...) -> ()) -> Connection,
-	BindToRenderStep: (self: Butler, name: string, priority: number, callback: (dt: number) -> ()) -> Butler,
+	BindToRenderStep: (self: Butler, name: string, priority: number, callback: (dt: number) -> ()) -> () -> (),
 	Extend: (self: Butler) -> Butler,
 	AttachToInstance: (self: Butler, instance: Instance) -> Connection,
 
 	Remove: (self: Butler, object: any?) -> Butler,
-	RemoveWithoutCleaning: (self: Butler, object: any?) -> Butler,
+	RemoveNoClean: (self: Butler, object: any?) -> Butler,
 	RemoveList: (self: Butler, ...any) -> Butler,
-	RemoveListWithoutCleaning: (self: Butler, ...any) -> Butler,
+	RemoveListNoClean: (self: Butler, ...any) -> Butler,
 
-	Clean: (self: Butler) -> (),
+	Clean: (self: Butler) -> Butler,
 	Destroy: (self: Butler) -> (),
 }
 
@@ -63,7 +63,7 @@ local ENUM_CLEANUP_METHODS = table.freeze({
 
 export type ButlerStatic = {
 	new: () -> Butler,
-	ECleanupMethods: typeof(ENUM_CLEANUP_METHODS),
+	CleanupMethods: typeof(ENUM_CLEANUP_METHODS),
 	IsButler: (obj: any) -> boolean,
 }
 
@@ -199,16 +199,18 @@ function Butler.BindToRenderStep(
 	name: string,
 	priority: number,
 	callback: (dt: number) -> ()
-): Butler
+): () -> ()
 	checkCleaning(self, "BindToRenderStep")
 
 	RunService:BindToRenderStep(name, priority, callback)
 
-	self:Add(function()
+	local function fn()
 		RunService:UnbindFromRenderStep(name)
-	end, ENUM_CLEANUP_METHODS.Function)
+	end
 
-	return self
+	self:Add(fn, ENUM_CLEANUP_METHODS.Function)
+
+	return fn
 end
 
 function Butler.Extend(self: PrivateButler): Butler
@@ -238,7 +240,7 @@ function Butler.Remove(self: PrivateButler, object: any?): Butler
 	return self
 end
 
-function Butler.RemoveWithoutCleaning(self: PrivateButler, object: any?): Butler
+function Butler.RemoveNoClean(self: PrivateButler, object: any?): Butler
 	if self.CurrentlyCleaning or object == nil then return self end
 	local node = self.Objects[object]
 	if not node then return self end
@@ -252,24 +254,24 @@ end
 function Butler.RemoveList(self: Butler, ...: any): Butler
 	if self.CurrentlyCleaning then return self end
 
-	for _, obj in { ... } do
-		self:Remove(obj)
+	for i = 1, select("#", ...) do
+		self:Remove(select(i, ...))
 	end
 
 	return self
 end
 
-function Butler.RemoveListWithoutCleaning(self: Butler, ...: any): Butler
+function Butler.RemoveListNoClean(self: Butler, ...: any): Butler
 	if self.CurrentlyCleaning then return self end
 
-	for _, obj in { ... } do
-		self:RemoveWithoutCleaning(obj)
+	for i = 1, select("#", ...) do
+		self:RemoveNoClean(select(i, ...))
 	end
 
 	return self
 end
 
-function Butler.Clean(self: PrivateButler)
+function Butler.Clean(self: PrivateButler): Butler
 	checkCleaning(self, "Clean")
 	self.CurrentlyCleaning = true
 
@@ -285,11 +287,12 @@ function Butler.Clean(self: PrivateButler)
 	self.Head = nil
 	table_clear(self.Objects)
 	self.CurrentlyCleaning = false
+
+	return self
 end
 
 function Butler.Destroy(self: Butler)
 	self:Clean()
-	table_clear(self :: any)
 	setmetatable(self, nil)
 end
 
@@ -297,7 +300,7 @@ end
 local ButlerStatic = {}
 
 ButlerStatic.new = createButler
-ButlerStatic.ECleanupMethods = ENUM_CLEANUP_METHODS
+ButlerStatic.CleanupMethods = ENUM_CLEANUP_METHODS
 
 function ButlerStatic.IsButler(obj: any): boolean
 	return type(obj) == "table" and getmetatable(obj) == Butler

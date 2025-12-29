@@ -1,0 +1,12 @@
+[package]
+name = "molyi/butler"
+version = "1.2.0"
+authors = ["Molyi"]
+registry = "https://github.com/UpliftGames/wally-index"
+repository = "https://github.com/MolyiEZ/Butler"
+license = "MIT"
+realm = "shared"
+exclude = ["**"]
+includes = ["wally.toml", "default.project.json", "README.md", "LICENSE", "src", "src/**"]
+
+[dependencies]
