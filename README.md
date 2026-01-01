@@ -14,7 +14,7 @@ pesde add molyi/butler
 Butler = "molyidev/butler@^1.2.1"
 ```
 
-## Why to use Butler?
+## Why use Butler?
 
 * **Fully Typed:** Designed to work with the new Luau type solver.
 * **Performance:** Uses a **Doubly Linked List** for O(1) Removal and **LIFO** cleanup structure.
@@ -136,3 +136,8 @@ mainButler:Clean()
 | `:RemoveListNoClean(...objects)` | Calls `:RemoveNoClean()` on all provided objects. Returns the `Butler` itself. |
 | `:Clean()` | Cleans all added objects in order. Returns the `Butler` itself. |
 | `:Destroy()` | Calls `:Clean()` and renders the Butler unusable. |
+
+## Inspiration
+
+**Butler** takes inspiration from **[Trove](https://github.com/Sleitnick/RbxUtil/tree/main/modules/trove)** and **[Janitor](https://github.com/howmanysmall/Janitor)**.
+If you do not want to use **Butler** and would prefer another option, I highly recommend either of them. However, if I had to choose between the two, I would recommend **Trove**.
