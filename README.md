@@ -5,13 +5,13 @@
 ### Pesde
 
 ```bash
-pesde add molyi/butler
+pesde add molyidev/butler
 ```
 
 ### Wally
 
 ```toml
-Butler = "molyidev/butler@^1.2.1"
+Butler = "molyidev/butler@^1.2.2"
 ```
 
 ## Why use Butler?
